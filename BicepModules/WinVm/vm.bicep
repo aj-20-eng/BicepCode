@@ -1,89 +1,160 @@
-param storageAccountName string = '8789abc45'
-param location string = resourceGroup().location
-param adminUsername string = 'youradminuser'
-param admin string = 'Pass123456789' // Replace with your actual password
+@description('The name of the VM')
+param virtualMachineName string
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2021-06-01' = {
-  name: '${resourceGroup().name}${storageAccountName}'
+@description('The virtual machine size.')
+param virtualMachineSize string = 'Standard_B2ms'
+
+@description('Specify the name of an existing VNet in the same resource group')
+param existingVirtualNetworkName string
+
+@description('Specify the resrouce group of the existing VNet')
+param existingVnetResourceGroup string
+
+@description('Specify the name of the Subnet Name')
+param existingSubnetName string
+
+@description('The Windows version for the VM. This will pick a fully patched image of this given Windows version.')
+@allowed([
+  '2016-datacenter-gensecond'
+  '2016-datacenter-server-core-g2'
+  '2016-datacenter-server-core-smalldisk-g2'
+  '2016-datacenter-smalldisk-g2'
+  '2016-datacenter-with-containers-g2'
+  '2016-datacenter-zhcn-g2'
+  '2019-datacenter-core-g2'
+  '2019-datacenter-core-smalldisk-g2'
+  '2019-datacenter-core-with-containers-g2'
+  '2019-datacenter-core-with-containers-smalldisk-g2'
+  '2019-datacenter-gensecond'
+  '2019-datacenter-smalldisk-g2'
+  '2019-datacenter-with-containers-g2'
+  '2019-datacenter-with-containers-smalldisk-g2'
+  '2019-datacenter-zhcn-g2'
+  '2022-datacenter-azure-edition'
+  '2022-datacenter-azure-edition-core'
+  '2022-datacenter-azure-edition-core-smalldisk'
+  '2022-datacenter-azure-edition-smalldisk'
+  '2022-datacenter-core-g2'
+  '2022-datacenter-core-smalldisk-g2'
+  '2022-datacenter-g2'
+  '2022-datacenter-smalldisk-g2'
+])
+param OSVersion string = '2019-datacenter-smalldisk-g2'
+
+
+@description('The admin user name of the VM')
+param adminUsername string
+
+@description('The admin password of the VM')
+@secure()
+param adminPassword string = 'DefaultPassword123!'
+
+@description('Location for all resources.')
+param location string = resourceGroup().location
+
+var networkInterfaceName = '${virtualMachineName}-nic'
+var networkSecurityGroupName = '${virtualMachineName}-nsg'
+var networkSecurityGroupRules = [
+  {
+    name: 'RDP'
+    properties: {
+      priority: 300
+      protocol: 'Tcp'
+      access: 'Allow'
+      direction: 'Inbound'
+      sourceAddressPrefix: '*'
+      sourcePortRange: '*'
+      destinationAddressPrefix: '*'
+      destinationPortRange: '3389'
+    }
+  }
+]
+var publicIpAddressName = '${virtualMachineName}-publicip-${uniqueString(virtualMachineName)}'
+var publicIpAddressType = 'Dynamic'
+var publicIpAddressSku = 'Basic'
+var nsgId = networkSecurityGroup.id
+var subnetRef = resourceId(existingVnetResourceGroup, 'Microsoft.Network/virtualNetWorks/subnets', existingVirtualNetworkName, existingSubnetName)
+
+resource publicIpAddress 'Microsoft.Network/publicIPAddresses@2022-01-01' = {
+  name: publicIpAddressName
   location: location
   sku: {
-    name: 'Standard_LRS'
+    name: publicIpAddressSku
   }
-  kind: 'StorageV2'
   properties: {
-    accessTier: 'Hot'
-  }
-}
-resource vm 'Microsoft.Compute/virtualMachines@2021-03-01' = {
-  name: 'YourVMName'
-  location: location
-  properties: {
-    hardwareProfile: {
-      vmSize: 'Standard_DS1_v2'
-    }
-    osProfile: {
-      computerName: 'YourVMName'
-      adminUsername: adminUsername
-      adminPassword: admin
-    }
-    storageProfile: {
-      imageReference: {
-        publisher: 'MicrosoftWindowsServer'
-        offer: 'WindowsServer'
-        sku: '2019-Datacenter'
-        version: 'latest'
-      }
-      osDisk: {
-        createOption: 'FromImage'
-      }
-    }
-    networkProfile: {
-      networkInterfaces: [
-        {
-          id: resourceId('Microsoft.Network/networkInterfaces', 'YourNICName')
-        }
-      ]
-    }
+    publicIPAllocationMethod: publicIpAddressType
   }
 }
 
-resource nic 'Microsoft.Network/networkInterfaces@2021-02-01' = {
-  name: 'YourNICName'
+resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2022-01-01' = {
+  name: networkSecurityGroupName
+  location: location
+  properties: {
+    securityRules: networkSecurityGroupRules
+  }
+}
+
+resource networkInterface 'Microsoft.Network/networkInterfaces@2022-01-01' = {
+  name: networkInterfaceName
   location: location
   properties: {
     ipConfigurations: [
       {
         name: 'ipconfig1'
         properties: {
-          privateIPAllocationMethod: 'Dynamic'
           subnet: {
-            id: resourceId('Microsoft.Network/virtualNetworks/subnets', 'YourVNETName', 'YourSubnetName')
+            id: subnetRef
+          }
+          privateIPAllocationMethod: 'Dynamic'
+          publicIPAddress: {
+            id: publicIpAddress.id
           }
         }
       }
     ]
+    enableAcceleratedNetworking: false
+    networkSecurityGroup: {
+      id: nsgId
+    }
   }
 }
 
-resource vnet 'Microsoft.Network/virtualNetworks@2021-02-01' = {
-  name: 'YourVNETName'
+resource virtualMachine 'Microsoft.Compute/virtualMachines@2022-03-01' = {
+  name: virtualMachineName
   location: location
   properties: {
-    addressSpace: {
-      addressPrefixes: ['10.0.0.0/16']
+    hardwareProfile: {
+      vmSize: virtualMachineSize
     }
-    subnets: [
-      {
-        name: 'YourSubnetName'
-        properties: {
-          addressPrefix: '10.0.0.0/24'
+    storageProfile: {
+      osDisk: {
+        createOption: 'FromImage'
+        managedDisk: {
+          storageAccountType: 'Premium_LRS'
         }
       }
-    ]
+      imageReference: {
+        publisher: 'MicrosoftWindowsServer'
+        offer: 'WindowsServer'
+        sku: OSVersion
+        version: 'latest'
+      }
+    }
+    networkProfile: {
+      networkInterfaces: [
+        {
+          id: networkInterface.id
+        }
+      ]
+    }
+    osProfile: {
+      computerName: virtualMachineName
+      adminUsername: adminUsername
+      adminPassword: adminPassword
+      windowsConfiguration: {
+        enableAutomaticUpdates: true
+        provisionVMAgent: true
+      }
+    }
   }
 }
-
-output vmId string = vm.id
-output storageAccountId string = storageAccount.id
-output nicId string = nic.id
-output vnetId string = vnet.id
